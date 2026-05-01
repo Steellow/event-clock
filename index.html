@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yearly Events</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#f5f5f5;color:#222;height:100vh;overflow:hidden}
+.app{display:grid;grid-template-columns:1fr 480px;height:100vh}
+@media(max-width:768px){.app{grid-template-columns:1fr;grid-template-rows:55vh 1fr;height:auto;overflow:auto}.clock-panel{min-height:300px}.panel{min-height:300px}}
+.clock-panel{display:flex;align-items:center;justify-content:center;padding:2rem;background:#fff;overflow:hidden}
+.clock-svg{width:100%;max-width:min(90vh,760px);height:auto;display:block}
+.panel{display:flex;flex-direction:column;border-left:1px solid #e8e8e8;background:#fff;overflow:hidden;position:relative}
+.panel-top{padding:1.25rem 1.5rem;border-bottom:1px solid #e8e8e8;flex-shrink:0}
+.panel-top h1{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:#aaa;margin-bottom:.75rem}
+.form-row{display:flex;gap:.5rem;align-items:center}
+.form-row input[type="text"]{flex:1;min-width:0}
+.form-row input{height:34px;padding:0 .6rem;border:1px solid #ddd;border-radius:6px;font-size:.84rem;outline:none;transition:border-color .15s;font-family:inherit;color:#222;background:#fff}
+.form-row input:focus{border-color:#999}
+.form-row input.invalid{border-color:#e55}
+.form-row button{height:34px;padding:0 .85rem;background:#222;color:#fff;border:none;border-radius:6px;font-size:.84rem;cursor:pointer;transition:background .15s;font-family:inherit;white-space:nowrap}
+.form-row button:hover{background:#444}
+.form-hint{font-size:.7rem;color:#bbb;margin-top:.35rem}
+.event-list{flex:1;overflow-y:auto;z-index:1}
+.stats{padding:.75rem 1.5rem;border-top:1px solid #e8e8e8;flex-shrink:0;font-size:.78rem;color:#999;line-height:1.7}
+.stats strong{color:#666;font-weight:500}
+.event-item{display:flex;align-items:center;gap:.55rem;padding:.5rem 1.5rem;transition:background .1s;cursor:default}
+.event-item:hover{background:#f8f8f8}
+.event-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;cursor:pointer}
+.event-date{font-size:.78rem;color:#999;white-space:nowrap;min-width:4.5em}
+.event-name{flex:1;min-width:0;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.event-name input{width:100%;border:1px solid #ccc;border-radius:4px;padding:1px 5px;font-size:.84rem;font-family:inherit;outline:none}
+.event-name input:focus{border-color:#888}
+.event-actions{display:flex;gap:.15rem;opacity:0;transition:opacity .15s;align-items:center}
+.event-item:hover .event-actions{opacity:1}
+.event-actions button{background:none;border:none;cursor:pointer;font-size:.82rem;color:#bbb;padding:2px 5px;border-radius:3px;transition:background .1s,color .1s;line-height:1}
+.event-actions button:hover{background:#eee;color:#555}
+.color-popover{position:absolute;left:1.5rem;background:#fff;border:1px solid #ddd;border-radius:8px;padding:6px;display:none;gap:4px;flex-wrap:wrap;width:calc(5*24px + 4*4px + 12px);box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100}
+.color-popover.open{display:flex}
+.color-option{width:20px;height:20px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border-color .15s}
+.color-option:hover{border-color:#555}
+.color-option.active{border-color:#222}
+.empty-state{display:flex;align-items:center;justify-content:center;height:100%;color:#ccc;font-size:.85rem;padding:2rem;text-align:center}
+.event-item.highlight{background:#fffbe6;transition:background .15s}
+svg .dot{cursor:pointer;transition:r .15s}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="clock-panel">
+    <svg class="clock-svg" viewBox="-420 -420 840 840" id="clock" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div class="panel">
+    <div class="panel-top">
+      <h1>Yearly Events</h1>
+      <div class="form-row">
+        <input type="text" id="eventDate" placeholder="dd.mm"/>
+        <input type="text" id="eventName" placeholder="Event name"/>
+        <button id="addBtn">Add</button>
+      </div>
+      <div class="form-hint">Date format: dd.mm or mm/dd</div>
+    </div>
+    <div class="event-list" id="eventList"></div>
+    <div class="stats" id="stats"></div>
+    <div class="color-popover" id="colorPopover"></div>
+  </div>
+</div>
+<script>
+var STORAGE_KEY='yearly-events-v3';
+var OLD_KEYS=['yearly-events-v1','yearly-events-v2'];
+var PALETTE=['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4','#f032e6','#ffe119','#469990','#9A6324'];
+var MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var CX=0,CY=0;
+
+var events=[];
+var nextId=1;
+var colorIdx=0;
+
+function load(){
+  try{
+    var raw=localStorage.getItem(STORAGE_KEY);
+    if(raw){var d=JSON.parse(raw);events=d.events||[];nextId=d.nextId||1;colorIdx=d.colorIdx||0;}
+    if(events.length===0){
+      for(var i=0;i<OLD_KEYS.length;i++){
+        var old=localStorage.getItem(OLD_KEYS[i]);
+        if(old){
+          var od=JSON.parse(old);
+          var oldEvents=od.events||[];
+          if(oldEvents.length>0){
+            events=oldEvents.map(function(e){
+              if(e.date&&!e.month){
+                var parts=e.date.split('-');
+                return{id:e.id,name:e.name,month:parseInt(parts[1],10),day:parseInt(parts[2],10),color:e.color};
+              }
+              return e;
+            });
+            nextId=Math.max.apply(null,events.map(function(e){return e.id;}))+1;
+            colorIdx=od.colorIdx||0;
+            save();
+            localStorage.removeItem(OLD_KEYS[i]);
+            break;
+          }
+        }
+      }
+    }
+  }catch(e){}
+}
+
+function save(){
+  localStorage.setItem(STORAGE_KEY,JSON.stringify({events:events,nextId:nextId,colorIdx:colorIdx}));
+}
+
+function addEvent(name,month,day){
+  var color=PALETTE[colorIdx%PALETTE.length];
+  colorIdx++;
+  events.push({id:nextId++,name:name,month:month,day:day,color:color});
+  save();render();
+}
+
+function deleteEvent(id){
+  events=events.filter(function(e){return e.id!==id;});
+  save();render();
+}
+
+function renameEvent(id,name){
+  var ev=events.find(function(e){return e.id===id;});
+  if(ev){ev.name=name;save();render();}
+}
+
+function changeColor(id,color){
+  var ev=events.find(function(e){return e.id===id;});
+  if(ev){ev.color=color;save();render();}
+  var pop=document.getElementById('colorPopover');
+  if(pop)pop.classList.remove('open');
+}
+
+function mdToAngle(month,day){
+  var ref=new Date(2024,month-1,day);
+  var start=new Date(2024,0,1);
+  var end=new Date(2025,0,1);
+  var frac=(ref-start)/(end-start);
+  return frac*360-90;
+}
+
+function polar(r,deg){
+  var rad=deg*Math.PI/180;
+  return{x:CX+r*Math.cos(rad),y:CY+r*Math.sin(rad)};
+}
+
+function esc(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatMD(month,day){
+  return MONTHS[month-1]+' '+day;
+}
+
+function parseDateInput(val){
+  var slash=val.match(/^(\d{1,2})\/(\d{1,2})$/);
+  var dot=val.match(/^(\d{1,2})\.(\d{1,2})$/);
+  var month,day;
+  if(slash){month=parseInt(slash[1],10);day=parseInt(slash[2],10);}
+  else if(dot){day=parseInt(dot[1],10);month=parseInt(dot[2],10);}
+  else return null;
+  if(month<1||month>12||day<1||day>31)return null;
+  var maxDays=[31,29,31,30,31,30,31,31,30,31,30,31];
+  if(day>maxDays[month-1])return null;
+  return{month:month,day:day};
+}
+
+function renderClock(){
+  var svg=document.getElementById('clock');
+  var R=200;
+  var s='';
+
+  s+='<circle cx="'+CX+'" cy="'+CY+'" r="'+R+'" fill="none" stroke="#e0e0e0" stroke-width="1.5"/>';
+  s+='<circle cx="'+CX+'" cy="'+CY+'" r="'+(R-40)+'" fill="none" stroke="#f0f0f0" stroke-width="0.5"/>';
+
+  var now=new Date();
+  var ta=mdToAngle(now.getMonth()+1,now.getDate());
+  var tIn=polar(18,ta);
+  var tOut=polar(R,ta);
+  s+='<line x1="'+tIn.x+'" y1="'+tIn.y+'" x2="'+tOut.x+'" y2="'+tOut.y+'" stroke="#d8d8d8" stroke-width="1.5" stroke-dasharray="5 4"/>';
+  var tRim=polar(R+8,ta);
+  s+='<circle cx="'+tRim.x+'" cy="'+tRim.y+'" r="3" fill="#bbb"/>';
+
+  for(var i=0;i<12;i++){
+    var angle=-90+i*30;
+    var tIn2=polar(R-10,angle);
+    var tOut2=polar(R,angle);
+    s+='<line x1="'+tIn2.x+'" y1="'+tIn2.y+'" x2="'+tOut2.x+'" y2="'+tOut2.y+'" stroke="#ccc" stroke-width="1.2"/>';
+    var lp=polar(R+24,angle);
+    var anchor=lp.x>CX+3?'start':lp.x<CX-3?'end':'middle';
+    var xOff=lp.x>CX+3?4:lp.x<CX-3?-4:0;
+    s+='<text x="'+(lp.x+xOff)+'" y="'+lp.y+'" text-anchor="'+anchor+'" dominant-baseline="central" fill="#aaa" font-size="13" font-weight="500" font-family="-apple-system,BlinkMacSystemFont,segoe ui,system-ui,sans-serif">'+MONTHS[i]+'</text>';
+  }
+
+  for(var i2=0;i2<12;i2++){
+    var ma=-90+i2*30+15;
+    var mp=polar(R-5,ma);
+    s+='<circle cx="'+mp.x+'" cy="'+mp.y+'" r="0.8" fill="#ddd"/>';
+  }
+
+  if(events.length>0){
+    var DOT_R=170;
+    var evtsWithAngle=events.map(function(e){return{id:e.id,name:e.name,month:e.month,day:e.day,color:e.color,angle:mdToAngle(e.month,e.day)};});
+    evtsWithAngle.sort(function(a,b){return a.angle-b.angle;});
+
+    var BASE_R=280;
+    var STEP_R=28;
+    var MAX_R=390;
+    var MIN_DIST=26;
+    var placed=[];
+
+    var labelData=evtsWithAngle.map(function(e){
+      var r=BASE_R;
+      var attempts=0;
+      while(attempts<20){
+        var pos=polar(r,e.angle);
+        var ok=true;
+        for(var j=0;j<placed.length;j++){
+          var dx=pos.x-placed[j].x;
+          var dy=pos.y-placed[j].y;
+          if(Math.sqrt(dx*dx+dy*dy)<MIN_DIST){ok=false;break;}
+        }
+        if(ok)break;
+        r+=STEP_R;
+        if(r>MAX_R){r=MAX_R;break;}
+        attempts++;
+      }
+      var lpos=polar(r,e.angle);
+      placed.push({x:lpos.x,y:lpos.y});
+      return{id:e.id,color:e.color,name:e.name,dotAngle:e.angle,labelR:r,labelPos:lpos};
+    });
+
+    for(var k=0;k<labelData.length;k++){
+      var ld=labelData[k];
+      var dp=polar(DOT_R,ld.dotAngle);
+      s+='<line x1="'+dp.x+'" y1="'+dp.y+'" x2="'+ld.labelPos.x+'" y2="'+ld.labelPos.y+'" stroke="'+ld.color+'" stroke-width="0.8" opacity="0.35"/>';
+    }
+
+    for(var k2=0;k2<evtsWithAngle.length;k2++){
+      var ev=evtsWithAngle[k2];
+      var dp2=polar(DOT_R,ev.angle);
+      s+='<circle cx="'+dp2.x+'" cy="'+dp2.y+'" r="5" fill="'+ev.color+'" stroke="#fff" stroke-width="2" class="dot" data-id="'+ev.id+'"><title>'+esc(ev.name)+' ('+formatMD(ev.month,ev.day)+')</title></circle>';
+    }
+
+    for(var k3=0;k3<labelData.length;k3++){
+      var lb=labelData[k3];
+      var anchor2=lb.labelPos.x>CX+3?'start':lb.labelPos.x<CX-3?'end':'middle';
+      var xOff2=lb.labelPos.x>CX+3?5:lb.labelPos.x<CX-3?-5:0;
+      s+='<text x="'+(lb.labelPos.x+xOff2)+'" y="'+lb.labelPos.y+'" text-anchor="'+anchor2+'" dominant-baseline="central" fill="'+lb.color+'" font-size="11" font-weight="500" font-family="-apple-system,BlinkMacSystemFont,segoe ui,system-ui,sans-serif">'+esc(lb.name)+'</text>';
+    }
+  }
+
+  s+='<circle cx="'+CX+'" cy="'+CY+'" r="3" fill="#ccc"/>';
+  svg.innerHTML=s;
+}
+
+function renderList(){
+  var list=document.getElementById('eventList');
+  if(events.length===0){
+    list.innerHTML='<div class="empty-state">Add events to see them on the clock</div>';
+    return;
+  }
+  var sorted=events.slice().sort(function(a,b){
+    if(a.month!==b.month)return a.month-b.month;
+    return a.day-b.day;
+  });
+  var html='';
+  for(var i=0;i<sorted.length;i++){
+    var e=sorted[i];
+    html+='<div class="event-item" data-id="'+e.id+'">';
+    html+='<span class="event-dot" style="background:'+e.color+'" onclick="toggleColorPopover('+e.id+',this)"></span>';
+    html+='<span class="event-date">'+formatMD(e.month,e.day)+'</span>';
+    html+='<span class="event-name" id="name-'+e.id+'">'+esc(e.name)+'</span>';
+    html+='<span class="event-actions">';
+    html+='<button onclick="startRename('+e.id+')" title="Rename">&#9998;</button>';
+    html+='<button onclick="deleteEvent('+e.id+')" title="Delete">&#10005;</button>';
+    html+='</span></div>';
+  }
+  list.innerHTML=html;
+}
+
+function toggleColorPopover(id,dotEl){
+  var pop=document.getElementById('colorPopover');
+  var wasOpen=pop.classList.contains('open')&&pop.getAttribute('data-id')==id;
+  pop.classList.remove('open');
+  if(wasOpen)return;
+  var panel=dotEl.closest('.panel');
+  var panelRect=panel.getBoundingClientRect();
+  var dotRect=dotEl.getBoundingClientRect();
+  pop.innerHTML='';
+  for(var j=0;j<PALETTE.length;j++){
+    var opt=document.createElement('span');
+    opt.className='color-option'+(PALETTE[j]===events.find(function(e){return e.id===id;}).color?' active':'');
+    opt.style.background=PALETTE[j];
+    opt.setAttribute('data-id',id);
+    opt.setAttribute('data-color',PALETTE[j]);
+    opt.addEventListener('click',function(){
+      changeColor(parseInt(this.getAttribute('data-id')),this.getAttribute('data-color'));
+    });
+    pop.appendChild(opt);
+  }
+  pop.style.left=(dotRect.left-panelRect.left)+'px';
+  pop.style.top=(dotRect.bottom-panelRect.top+4)+'px';
+  pop.setAttribute('data-id',id);
+  pop.classList.add('open');
+}
+
+function startRename(id){
+  var el=document.getElementById('name-'+id);
+  var ev=events.find(function(e){return e.id===id;});
+  if(!ev)return;
+  var inp=document.createElement('input');
+  inp.type='text';
+  inp.value=ev.name;
+  inp.onblur=function(){finishRename(id,inp.value);};
+  inp.onkeydown=function(e2){if(e2.key==='Enter')inp.blur();if(e2.key==='Escape')render();};
+  el.innerHTML='';
+  el.appendChild(inp);
+  inp.focus();
+  inp.select();
+}
+
+function finishRename(id,val){
+  var trimmed=val.trim();
+  if(trimmed)renameEvent(id,trimmed);
+  else render();
+}
+
+function dayOfYear(month,day){
+  var cum=[0,31,59,90,120,151,181,212,243,273,304,334];
+  return cum[month-1]+day;
+}
+
+function renderStats(){
+  var el=document.getElementById('stats');
+  if(events.length<2){el.innerHTML=events.length===0?'':'<strong>'+events.length+'</strong> event';return;}
+  var sorted=events.slice().sort(function(a,b){
+    return dayOfYear(a.month,a.day)-dayOfYear(b.month,b.day);
+  });
+  var gaps=[];
+  for(var i=1;i<sorted.length;i++){
+    var prev=dayOfYear(sorted[i-1].month,sorted[i-1].day);
+    var curr=dayOfYear(sorted[i].month,sorted[i].day);
+    gaps.push({days:curr-prev,from:sorted[i-1],to:sorted[i]});
+  }
+  var wrapFrom=dayOfYear(sorted[sorted.length-1].month,sorted[sorted.length-1].day);
+  var wrapTo=dayOfYear(sorted[0].month,sorted[0].day)+365;
+  gaps.push({days:wrapTo-wrapFrom,from:sorted[sorted.length-1],to:sorted[0]});
+  var maxGap=gaps[0],total=0;
+  for(var j=0;j<gaps.length;j++){
+    if(gaps[j].days>maxGap.days)maxGap=gaps[j];
+    total+=gaps[j].days;
+  }
+  var avg=(total/gaps.length).toFixed(1);
+  var h='<div><strong>'+events.length+'</strong> events &middot; avg <strong>'+avg+'d</strong> between events</div>';
+  h+='<div>Longest gap: <strong>'+maxGap.days+'d</strong> ('+formatMD(maxGap.from.month,maxGap.from.day)+' &rarr; '+formatMD(maxGap.to.month,maxGap.to.day)+')</div>';
+  el.innerHTML=h;
+}
+
+function render(){
+  renderClock();
+  renderList();
+  renderStats();
+}
+
+document.getElementById('clock').addEventListener('click',function(e){
+  var dot=e.target.closest('.dot');
+  if(!dot)return;
+  var id=dot.getAttribute('data-id');
+  var item=document.querySelector('.event-item[data-id="'+id+'"]');
+  if(!item)return;
+  item.scrollIntoView({behavior:'smooth',block:'nearest'});
+  item.classList.add('highlight');
+  setTimeout(function(){item.classList.remove('highlight');},1200);
+});
+
+document.getElementById('eventList').addEventListener('mouseover',function(e){
+  var item=e.target.closest('.event-item');
+  if(item){
+    var dot=document.querySelector('svg .dot[data-id="'+item.dataset.id+'"]');
+    if(dot)dot.setAttribute('r','8');
+  }
+});
+document.getElementById('eventList').addEventListener('mouseout',function(e){
+  var item=e.target.closest('.event-item');
+  if(item){
+    var dot=document.querySelector('svg .dot[data-id="'+item.dataset.id+'"]');
+    if(dot)dot.setAttribute('r','5');
+  }
+});
+
+document.addEventListener('click',function(e){
+  if(e.target.closest('.color-popover'))return;
+  if(e.target.closest('.event-dot'))return;
+  var pop=document.getElementById('colorPopover');
+  if(pop)pop.classList.remove('open');
+});
+
+load();
+
+document.getElementById('addBtn').addEventListener('click',function(){
+  var dateVal=document.getElementById('eventDate').value.trim();
+  var name=document.getElementById('eventName').value.trim();
+  var parsed=parseDateInput(dateVal);
+  var dateInput=document.getElementById('eventDate');
+  if(!parsed){dateInput.classList.add('invalid');return;}
+  dateInput.classList.remove('invalid');
+  if(!name)return;
+  addEvent(name,parsed.month,parsed.day);
+  document.getElementById('eventDate').value='';
+  document.getElementById('eventName').value='';
+  document.getElementById('eventDate').focus();
+});
+
+document.getElementById('eventDate').addEventListener('input',function(){
+  this.classList.remove('invalid');
+});
+
+document.getElementById('eventName').addEventListener('keydown',function(e){
+  if(e.key==='Enter')document.getElementById('addBtn').click();
+});
+
+document.getElementById('eventDate').addEventListener('keydown',function(e){
+  if(e.key==='Enter')document.getElementById('addBtn').click();
+});
+
+render();
+</script>
+</body>
+</html>
